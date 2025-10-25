@@ -2,22 +2,29 @@ const express = require('express');
 const sqlite3 = require('sqlite3').verbose();
 const path = require('path');
 const cors = require('cors');
+const fs = require('fs');
 const app = express();
 
-// Use environment port for Railway or 3000 for local
+// Use environment port for Railway
 const PORT = process.env.PORT || 3000;
 
 // Middleware
 app.use(express.json());
 app.use(cors());
-app.use(express.static('.'));
+app.use(express.static(__dirname));
 
-// Initialize SQLite Database
-const db = new sqlite3.Database('./foodly.db', (err) => {
+// Database path for Railway
+const dbPath = process.env.NODE_ENV === 'production' 
+  ? '/tmp/foodly.db' 
+  : './foodly.db';
+
+console.log('Using database path:', dbPath);
+
+const db = new sqlite3.Database(dbPath, (err) => {
     if (err) {
         console.error('Error opening database:', err.message);
     } else {
-        console.log('Connected to SQLite database.');
+        console.log('✅ Connected to SQLite database at:', dbPath);
         
         // Create tables
         db.run(`CREATE TABLE IF NOT EXISTS users (
@@ -46,6 +53,8 @@ const db = new sqlite3.Database('./foodly.db', (err) => {
             added_date DATETIME DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (username) REFERENCES users (username)
         )`);
+
+        console.log('✅ Database tables created/verified');
     }
 });
 
@@ -62,6 +71,7 @@ app.post('/api/login', (req, res) => {
     // Check if user exists
     db.get('SELECT * FROM users WHERE username = ?', [username], (err, row) => {
         if (err) {
+            console.error('Database error:', err);
             return res.status(500).json({ error: 'Database error' });
         }
 
@@ -72,6 +82,7 @@ app.post('/api/login', (req, res) => {
             // Create new user
             db.run('INSERT INTO users (username, password) VALUES (?, ?)', [username, password], function(err) {
                 if (err) {
+                    console.error('User creation error:', err);
                     return res.status(500).json({ error: 'Failed to create user' });
                 }
                 res.json({ message: 'User created and login successful', username });
@@ -102,7 +113,10 @@ app.post('/api/order', (req, res) => {
             items.forEach(item => {
                 db.run(
                     'INSERT INTO cart_history (username, item_id, item_name, quantity, price) VALUES (?, ?, ?, ?, ?)',
-                    [username, item.id, item.name, item.quantity, item.price]
+                    [username, item.id, item.name, item.quantity, item.price],
+                    (err) => {
+                        if (err) console.error('Cart history error:', err);
+                    }
                 );
             });
 
@@ -120,6 +134,7 @@ app.get('/api/orders/:username', (req, res) => {
 
     db.all('SELECT * FROM orders WHERE username = ? ORDER BY order_date DESC', [username], (err, rows) => {
         if (err) {
+            console.error('Orders fetch error:', err);
             return res.status(500).json({ error: 'Database error' });
         }
         res.json(rows);
@@ -132,6 +147,7 @@ app.get('/api/cart-history/:username', (req, res) => {
 
     db.all('SELECT * FROM cart_history WHERE username = ? ORDER BY added_date DESC', [username], (err, rows) => {
         if (err) {
+            console.error('Cart history fetch error:', err);
             return res.status(500).json({ error: 'Database error' });
         }
         res.json(rows);
@@ -148,16 +164,31 @@ app.get('/admin', (req, res) => {
             SELECT 'cart_history' as table_name, COUNT(*) as count FROM cart_history`, (err, counts) => {
         
         if (err) {
+            console.error('Admin stats error:', err);
             return res.status(500).send('Database error: ' + err.message);
         }
 
         let html = `
         <html>
-        <head><title>Foodly DB Check</title></head>
-        <body style="font-family: Arial; margin: 20px;">
-            <h1>🍕 Foodly Database Status</h1>
-            <h3>Table Counts:</h3>
-            <ul>
+        <head>
+            <title>Foodly DB Check</title>
+            <style>
+                body { font-family: Arial, sans-serif; margin: 20px; background: #f5f5f5; }
+                .container { max-width: 800px; margin: 0 auto; background: white; padding: 20px; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+                h1 { color: #333; }
+                ul { list-style: none; padding: 0; }
+                li { background: #e8f5e8; margin: 10px 0; padding: 15px; border-radius: 5px; border-left: 4px solid #4CAF50; }
+                a { color: #007bff; text-decoration: none; }
+                a:hover { text-decoration: underline; }
+            </style>
+        </head>
+        <body>
+            <div class="container">
+                <h1>🍕 Foodly Database Status</h1>
+                <p><strong>Environment:</strong> ${process.env.NODE_ENV || 'development'}</p>
+                <p><strong>Database Path:</strong> ${dbPath}</p>
+                <h3>Table Counts:</h3>
+                <ul>
         `;
 
         counts.forEach(row => {
@@ -165,7 +196,9 @@ app.get('/admin', (req, res) => {
         });
 
         html += `</ul>
-            <p><a href="/admin/details">View Detailed Data</a></p>
+                <p><a href="/admin/details">📊 View Detailed Data</a></p>
+                <p><a href="/">🏠 Go to Foodly App</a></p>
+            </div>
         </body>
         </html>`;
 
@@ -177,51 +210,92 @@ app.get('/admin', (req, res) => {
 app.get('/admin/details', (req, res) => {
     // Get all data
     db.all(`SELECT * FROM users`, (err, users) => {
+        if (err) {
+            console.error('Users fetch error:', err);
+            users = [];
+        }
+        
         db.all(`SELECT * FROM orders`, (err, orders) => {
+            if (err) {
+                console.error('Orders fetch error:', err);
+                orders = [];
+            }
+            
             db.all(`SELECT * FROM cart_history`, (err, cartHistory) => {
+                if (err) {
+                    console.error('Cart history fetch error:', err);
+                    cartHistory = [];
+                }
                 
                 let html = `
                 <html>
-                <head><title>Foodly DB Details</title></head>
-                <body style="font-family: Arial; margin: 20px;">
-                    <h1>📊 Foodly Database Details</h1>
-                    <p><a href="/admin">← Back to Summary</a></p>
-                    
-                    <h2>👥 Users (${users.length})</h2>
-                    <table border="1" cellpadding="8">
-                        <tr><th>ID</th><th>Username</th><th>Created</th></tr>
+                <head>
+                    <title>Foodly DB Details</title>
+                    <style>
+                        body { font-family: Arial, sans-serif; margin: 20px; background: #f5f5f5; }
+                        .container { max-width: 1200px; margin: 0 auto; }
+                        table { border-collapse: collapse; width: 100%; margin: 20px 0; background: white; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+                        th, td { border: 1px solid #ddd; padding: 12px; text-align: left; }
+                        th { background-color: #ff6b35; color: white; }
+                        .section { background: white; padding: 20px; border-radius: 10px; margin: 20px 0; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+                        a { color: #007bff; text-decoration: none; }
+                        a:hover { text-decoration: underline; }
+                    </style>
+                </head>
+                <body>
+                    <div class="container">
+                        <h1>📊 Foodly Database Details</h1>
+                        <p><a href="/admin">← Back to Summary</a> | <a href="/">🏠 Go to Foodly App</a></p>
+                        
+                        <div class="section">
+                            <h2>👥 Users (${users.length})</h2>
+                            <table>
+                                <tr><th>ID</th><th>Username</th><th>Password</th><th>Created</th></tr>
                 `;
 
                 users.forEach(user => {
-                    html += `<tr><td>${user.id}</td><td>${user.username}</td><td>${user.created_at}</td></tr>`;
+                    html += `<tr><td>${user.id}</td><td>${user.username}</td><td>${user.password}</td><td>${user.created_at}</td></tr>`;
                 });
 
-                html += `</table>
-                    
-                    <h2>📦 Orders (${orders.length})</h2>
-                    <table border="1" cellpadding="8">
-                        <tr><th>ID</th><th>Username</th><th>Total</th><th>Date</th></tr>
+                html += `</table></div>
+                        
+                        <div class="section">
+                            <h2>📦 Orders (${orders.length})</h2>
+                            <table>
+                                <tr><th>ID</th><th>Username</th><th>Total</th><th>Date</th><th>Items Count</th></tr>
                 `;
 
                 orders.forEach(order => {
-                    html += `<tr><td>${order.id}</td><td>${order.username}</td><td>₹${order.total}</td><td>${order.order_date}</td></tr>`;
+                    const items = order.items ? JSON.parse(order.items) : [];
+                    html += `<tr><td>${order.id}</td><td>${order.username}</td><td>₹${order.total}</td><td>${order.order_date}</td><td>${items.length}</td></tr>`;
                 });
 
-                html += `</table>
-                    
-                    <h2>🛒 Cart History (${cartHistory.length})</h2>
-                    <table border="1" cellpadding="8">
-                        <tr><th>ID</th><th>Username</th><th>Item</th><th>Qty</th><th>Price</th></tr>
+                html += `</table></div>
+                        
+                        <div class="section">
+                            <h2>🛒 Cart History (${cartHistory.length})</h2>
+                            <table>
+                                <tr><th>ID</th><th>Username</th><th>Item</th><th>Qty</th><th>Price</th><th>Date</th></tr>
                 `;
 
                 cartHistory.forEach(item => {
-                    html += `<tr><td>${item.id}</td><td>${item.username}</td><td>${item.item_name}</td><td>${item.quantity}</td><td>₹${item.price}</td></tr>`;
+                    html += `<tr><td>${item.id}</td><td>${item.username}</td><td>${item.item_name}</td><td>${item.quantity}</td><td>₹${item.price}</td><td>${item.added_date}</td></tr>`;
                 });
 
-                html += `</table></body></html>`;
+                html += `</table></div></div></body></html>`;
                 res.send(html);
             });
         });
+    });
+});
+
+// Health check route
+app.get('/health', (req, res) => {
+    res.json({ 
+        status: 'OK', 
+        environment: process.env.NODE_ENV || 'development',
+        timestamp: new Date().toISOString(),
+        database: dbPath
     });
 });
 
@@ -230,18 +304,25 @@ app.get('/', (req, res) => {
     res.sendFile(path.join(__dirname, 'index.html'));
 });
 
-// Start server - Important for Railway: listen on 0.0.0.0
+// Start server
 app.listen(PORT, '0.0.0.0', () => {
-    console.log(`Foodly server running on port ${PORT}`);
+    console.log(`🚀 Foodly server running on port ${PORT}`);
+    console.log(`📊 Environment: ${process.env.NODE_ENV || 'development'}`);
+    console.log(`💾 Database path: ${dbPath}`);
+    console.log(`🌐 App URL: http://0.0.0.0:${PORT}`);
+    console.log(`📋 Admin panel: http://0.0.0.0:${PORT}/admin`);
+    console.log(`❤️ Health check: http://0.0.0.0:${PORT}/health`);
 });
 
 // Graceful shutdown
 process.on('SIGINT', () => {
+    console.log('🛑 Shutting down server...');
     db.close((err) => {
         if (err) {
-            console.error(err.message);
+            console.error('Database close error:', err.message);
+        } else {
+            console.log('✅ Database connection closed.');
         }
-        console.log('Database connection closed.');
         process.exit(0);
     });
 });
