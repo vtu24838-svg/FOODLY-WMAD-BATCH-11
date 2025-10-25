@@ -5,7 +5,8 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "dev": "node server.js"
+    "dev": "node server.js",
+    "test": "echo \"No tests specified\" && exit 0"
   },
   "dependencies": {
     "express": "^4.18.2",
@@ -15,7 +16,14 @@
   "engines": {
     "node": ">=18.0.0"
   },
-  "keywords": ["food", "ordering", "nodejs", "sqlite"],
-  "author": "Your Name",
+  "keywords": [
+    "food",
+    "ordering",
+    "nodejs",
+    "sqlite",
+    "express",
+    "restaurant"
+  ],
+  "author": "Your Team",
   "license": "MIT"
 }
